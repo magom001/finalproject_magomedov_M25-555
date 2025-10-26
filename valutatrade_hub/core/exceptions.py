@@ -96,12 +96,19 @@ class NegativeValueError(ValidationError):
         )
 
 
-class UnknownCurrencyError(ValidationError):
-    """Неизвестная валюта."""
+class CurrencyNotFoundError(ValidationError):
+    """Валюта не найдена в реестре."""
 
-    def __init__(self, currency: str):
+    def __init__(self, code: str):
+        super().__init__("Валюта не найдена", f"Неизвестная валюта '{code}'")
+
+
+class ApiRequestError(ValutaTradeError):
+    """Исключение для ошибок при обращении к внешним API."""
+
+    def __init__(self, reason: str):
         super().__init__(
-            "Неизвестная базовая валюта", f"Неизвестная базовая валюта '{currency}'"
+            "Ошибка внешнего API", f"Ошибка при обращении к внешнему API: {reason}"
         )
 
 

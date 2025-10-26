@@ -7,6 +7,7 @@ from typing import Optional
 
 from .exceptions import (
     AuthenticationError,
+    CurrencyNotFoundError,
     EmptyValueError,
     InsufficientFundsError,
     InvalidPasswordError,
@@ -14,7 +15,6 @@ from .exceptions import (
     RateUnavailableError,
     ShortPasswordError,
     UnauthenticatedError,
-    UnknownCurrencyError,
     UsernameExistsError,
     UserNotFoundError,
     WalletNotFoundError,
@@ -143,7 +143,7 @@ class PortfolioUseCases:
 
         Raises:
             UnauthenticatedError: Если пользователь не залогинен
-            UnknownCurrencyError: Если базовая валюта неизвестна
+            CurrencyNotFoundError: Если базовая валюта неизвестна
         """
         # Проверка логина
         if not self.session.is_logged_in():
@@ -171,7 +171,7 @@ class PortfolioUseCases:
         if not base_currency_exists and (
             not portfolio or base_currency not in portfolio._wallets
         ):
-            raise UnknownCurrencyError(base_currency)
+            raise CurrencyNotFoundError(base_currency)
 
         if not portfolio or not portfolio._wallets:
             message = (

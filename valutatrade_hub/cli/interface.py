@@ -7,7 +7,11 @@ import readline  # noqa: F401
 import shlex
 from typing import Any, Dict
 
-from ..core.exceptions import ValutaTradeError
+from ..core.exceptions import (
+    ApiRequestError,
+    CurrencyNotFoundError,
+    ValutaTradeError,
+)
 from ..core.usecases import PortfolioUseCases, RateUseCases, Session, UserUseCases
 
 
@@ -102,8 +106,32 @@ class CLI:
         print(f"  {c.GREEN}help{c.RESET}")
         print(f"  {c.GREEN}exit{c.RESET}")
 
+    def _handle_currency_not_found_error(self, error: CurrencyNotFoundError):
+        """
+        Обработать ошибку CurrencyNotFoundError с подсказками.
+
+        Args:
+            error: Исключение CurrencyNotFoundError
+        """
+        print(f"{error.short}")
+        print(f"   {error.detail}")
+        print(self._get_supported_currencies())
+
+    def _handle_api_request_error(self, error: ApiRequestError):
+        """
+        Обработать ошибку ApiRequestError с подсказками.
+
+        Args:
+            error: Исключение ApiRequestError
+        """
+        print(f"{error.short}")
+        print(f"   {error.detail}")
+        print("\nРекомендации:")
+        print("   - Проверьте подключение к интернету")
+        print("   - Повторите попытку позже")
+
     def _execute_command(self, parsed: Dict[str, Any]):
-        """Выполнить команду (только диспетчеризация)."""
+        """Выполнить команду (только диспетчеризация) с глобальной обработкой ошибок."""
         command = parsed.get("command")
 
         if not command:
@@ -120,7 +148,14 @@ class CLI:
 
         command_method = getattr(self, f"_cmd_{command.replace('-', '_')}", None)
         if command_method:
-            command_method(parsed)
+            try:
+                command_method(parsed)
+            except CurrencyNotFoundError as e:
+                self._handle_currency_not_found_error(e)
+            except ApiRequestError as e:
+                self._handle_api_request_error(e)
+            except ValutaTradeError as e:
+                print(str(e))
         else:
             print(f"Неизвестная команда: {command}")
             print("Введите 'help' для списка доступных команд")
@@ -137,11 +172,8 @@ class CLI:
             print("Ошибка: Не указан параметр --password")
             return
 
-        try:
-            message = self.user_cases.register_user(username, password)
-            print(message)
-        except ValutaTradeError as e:
-            print(str(e))
+        message = self.user_cases.register_user(username, password)
+        print(message)
 
     def _cmd_login(self, args: Dict[str, Any]):
         """Обработчик команды login."""
@@ -155,20 +187,14 @@ class CLI:
             print("Ошибка: Не указан параметр --password")
             return
 
-        try:
-            message = self.user_cases.login_user(username, password)
-            print(message)
-        except ValutaTradeError as e:
-            print(str(e))
+        message = self.user_cases.login_user(username, password)
+        print(message)
 
     def _cmd_show_portfolio(self, args: Dict[str, Any]):
         """Обработчик команды show-portfolio."""
         base_currency = args.get("base", "USD")
-        try:
-            message = self.portfolio_cases.show_portfolio(base_currency)
-            print(message)
-        except ValutaTradeError as e:
-            print(str(e))
+        message = self.portfolio_cases.show_portfolio(base_currency)
+        print(message)
 
     def _cmd_buy(self, args: Dict[str, Any]):
         """Обработчик команды buy."""
@@ -188,11 +214,8 @@ class CLI:
             print(f"Ошибка: Неверный формат числа '{amount_str}'")
             return
 
-        try:
-            message = self.portfolio_cases.buy_currency(currency, amount)
-            print(message)
-        except ValutaTradeError as e:
-            print(str(e))
+        message = self.portfolio_cases.buy_currency(currency, amount)
+        print(message)
 
     def _cmd_sell(self, args: Dict[str, Any]):
         """Обработчик команды sell."""
@@ -212,11 +235,8 @@ class CLI:
             print(f"Ошибка: Неверный формат числа '{amount_str}'")
             return
 
-        try:
-            message = self.portfolio_cases.sell_currency(currency, amount)
-            print(message)
-        except ValutaTradeError as e:
-            print(str(e))
+        message = self.portfolio_cases.sell_currency(currency, amount)
+        print(message)
 
     def _cmd_get_rate(self, args: Dict[str, Any]):
         """Обработчик команды get-rate."""
@@ -230,11 +250,8 @@ class CLI:
             print("Ошибка: Не указан параметр --to")
             return
 
-        try:
-            message = self.rate_cases.get_exchange_rate(from_currency, to_currency)
-            print(message)
-        except ValutaTradeError as e:
-            print(str(e))
+        message = self.rate_cases.get_exchange_rate(from_currency, to_currency)
+        print(message)
 
     def run_repl(self):
         """Запустить REPL цикл."""
