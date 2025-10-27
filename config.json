@@ -1,0 +1,11 @@
+{
+  "data_dir": "data",
+  "users_file": "users.json",
+  "portfolios_file": "portfolios.json",
+  "rates_file": "rates.json",
+  "rates_ttl_seconds": 3600,
+  "default_base_currency": "USD",
+  "log_format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+  "log_level": "INFO",
+  "log_file": "logs/app.log"
+}

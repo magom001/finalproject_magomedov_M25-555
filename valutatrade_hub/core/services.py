@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from ..infra.settings import get_settings
 from .models import Portfolio, User
 
 
@@ -18,17 +19,22 @@ class DataService:
         Инициализация сервиса.
 
         Args:
-            data_dir: Путь к директории с данными
+            data_dir: Путь к директории с данными (если None, берется из конфигурации)
         """
         if data_dir is None:
-            # Получаем путь к корню проекта
-            project_root = Path(__file__).parent.parent.parent
-            data_dir = project_root / "data"
+            # Получаем настройки из синглтона
+            settings = get_settings()
+            data_dir = settings.get_data_dir()
 
         self.data_dir = Path(data_dir)
-        self.users_file = self.data_dir / "users.json"
-        self.portfolios_file = self.data_dir / "portfolios.json"
-        self.rates_file = self.data_dir / "rates.json"
+
+        # Используем SettingsLoader для получения имен файлов
+        settings = get_settings()
+        self.users_file = self.data_dir / settings.get("users_file", "users.json")
+        self.portfolios_file = self.data_dir / settings.get(
+            "portfolios_file", "portfolios.json"
+        )
+        self.rates_file = self.data_dir / settings.get("rates_file", "rates.json")
 
         # Создаём директорию если не существует
         self.data_dir.mkdir(parents=True, exist_ok=True)

@@ -5,6 +5,7 @@
 from datetime import datetime
 from typing import Optional
 
+from ..infra.settings import get_settings
 from .exceptions import (
     AuthenticationError,
     CurrencyNotFoundError,
@@ -131,12 +132,13 @@ class PortfolioUseCases:
         self.session = session
         self.data_service = get_data_service()
 
-    def show_portfolio(self, base_currency: str = "USD") -> str:
+    def show_portfolio(self, base_currency: str = None) -> str:
         """
         Показать портфель пользователя.
 
         Args:
             base_currency: Базовая валюта для конвертации
+                (если None, берется из конфигурации)
 
         Returns:
             Отформатированный портфель
@@ -148,6 +150,11 @@ class PortfolioUseCases:
         # Проверка логина
         if not self.session.is_logged_in():
             raise UnauthenticatedError()
+
+        # Если базовая валюта не указана, берем из конфигурации
+        if base_currency is None:
+            settings = get_settings()
+            base_currency = settings.get_default_base_currency()
 
         # Валидация базовой валюты
         base_currency = base_currency.upper()

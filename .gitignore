@@ -4,3 +4,4 @@ __pycache__/
 dist/
 db_meta.json
 data/
+logs/
