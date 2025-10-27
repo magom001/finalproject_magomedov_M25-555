@@ -1,7 +1,6 @@
 """Инструменты настройки и получения логгеров приложения ValutaTrade Hub."""
 
 import logging
-import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Optional
@@ -65,12 +64,6 @@ def setup_logging(
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
-    # Console handler (только для WARNING и выше, чтобы не захламлять консоль)
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.WARNING)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-
     # Предотвращаем передачу логов в root logger
     logger.propagate = False
 
@@ -121,11 +114,6 @@ def get_parser_logger() -> logging.Logger:
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
-
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.WARNING)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
 
     logger.propagate = False
 
