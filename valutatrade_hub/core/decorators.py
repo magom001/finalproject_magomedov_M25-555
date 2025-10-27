@@ -1,3 +1,5 @@
+"""Декораторы для логирования действий и расширения поведения use case."""
+
 import functools
 import inspect
 from typing import Any, Callable

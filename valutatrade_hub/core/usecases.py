@@ -637,6 +637,7 @@ class RateUseCases:
         base_filter: Optional[str] = None,
         top_n: Optional[int] = None,
     ) -> str:
+        """Вернуть отформатированный список курсов из локального кеша."""
         payload = self.database.load_rates()
         pairs = payload.get("pairs", {})
 

@@ -1,3 +1,5 @@
+"""Инструменты настройки и получения логгеров приложения ValutaTrade Hub."""
+
 import logging
 import sys
 from logging.handlers import RotatingFileHandler

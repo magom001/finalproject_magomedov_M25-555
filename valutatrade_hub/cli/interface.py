@@ -28,6 +28,22 @@ class Colors:
     DIM = "\033[2m"
 
 
+SOURCE_ALIASES = {
+    "coingecko": "CoinGecko",
+    "coin": "CoinGecko",
+    "gecko": "CoinGecko",
+    "exchangerate": "ExchangeRate-API",
+    "exchange": "ExchangeRate-API",
+    "exchange-rate": "ExchangeRate-API",
+    "exchange_rate": "ExchangeRate-API",
+}
+
+SOURCE_DISPLAY = {
+    "coingecko": "CoinGecko",
+    "exchangerate": "ExchangeRate-API",
+}
+
+
 class CLI:
     """REPL интерфейс для ValutaTrade Hub."""
 
@@ -106,7 +122,7 @@ class CLI:
         )
         print(
             f"  {c.GREEN}update-rates{c.RESET}   {c.DIM}[--source "
-            f"coingecko|exchangerate]{c.RESET}"
+            f"{'|'.join(SOURCE_DISPLAY.keys())}]{c.RESET}"
         )
         print(
             f"  {c.GREEN}show-rates{c.RESET}     {c.DIM}[--currency <код>] "
@@ -268,20 +284,13 @@ class CLI:
         source_filter = None
 
         if source_arg:
-            source_map = {
-                "coingecko": "CoinGecko",
-                "coin": "CoinGecko",
-                "exchangerate": "ExchangeRate-API",
-                "exchange": "ExchangeRate-API",
-                "exchange-rate": "ExchangeRate-API",
-                "exchange_rate": "ExchangeRate-API",
-            }
             normalized = source_arg.lower()
-            source_filter = source_map.get(normalized)
+            source_filter = SOURCE_ALIASES.get(normalized)
             if source_filter is None:
+                available = ", ".join(sorted(SOURCE_DISPLAY.keys()))
                 print(
                     "Ошибка: неизвестный источник. Доступны значения: "
-                    "coingecko, exchangerate"
+                    f"{available}"
                 )
                 return
 
