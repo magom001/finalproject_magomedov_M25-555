@@ -2,6 +2,20 @@
 
 ValutaTrade Hub — консольное приложение для отслеживания портфеля валют и криптоактивов. Пользователь регистрируется, ведёт кошельки в разных валютах, получает биржевые курсы и может симулировать сделки покупки и продажи.
 
+## ASCIINEMA
+
+Демонстрация полного цикла `register` → `login` → `buy/sell` → `show-portfolio` → `get-rate`
+
+```bash
+asciinema play ./demos/main-demo.cast
+```
+
+Демонстрация `update-rates/show-rates`
+
+```bash
+asciinema play ./demos/update-rates-demo.cast
+```
+
 ## Структура проекта
 
 ```

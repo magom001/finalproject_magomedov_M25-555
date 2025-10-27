@@ -4,7 +4,7 @@
 
 import re
 from abc import ABC, abstractmethod
-from typing import Dict
+from typing import Dict, List, Tuple
 
 from .exceptions import CurrencyNotFoundError, ValidationError
 
@@ -243,6 +243,26 @@ def get_currency(code: str) -> Currency:
     if code_upper not in _CURRENCY_REGISTRY:
         raise CurrencyNotFoundError(code)
     return _CURRENCY_REGISTRY[code_upper]
+
+
+def get_fiat_currency_codes() -> Tuple[str, ...]:
+    """Вернуть отсортированный кортеж кодов зарегистрированных фиатных валют."""
+    codes: List[str] = [
+        code
+        for code, currency in _CURRENCY_REGISTRY.items()
+        if isinstance(currency, FiatCurrency)
+    ]
+    return tuple(sorted(codes))
+
+
+def get_crypto_currency_codes() -> Tuple[str, ...]:
+    """Вернуть отсортированный кортеж кодов зарегистрированных криптовалют."""
+    codes: List[str] = [
+        code
+        for code, currency in _CURRENCY_REGISTRY.items()
+        if isinstance(currency, CryptoCurrency)
+    ]
+    return tuple(sorted(codes))
 
 
 def initialize_default_currencies() -> None:

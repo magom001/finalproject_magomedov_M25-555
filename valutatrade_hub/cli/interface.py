@@ -7,6 +7,7 @@ import readline  # noqa: F401
 import shlex
 from typing import Any, Dict
 
+from ..core.currencies import get_all_currencies
 from ..core.exceptions import (
     ApiRequestError,
     CurrencyNotFoundError,
@@ -141,6 +142,15 @@ class CLI:
         print(f"{error.short}")
         print(f"   {error.detail}")
         print(self._get_supported_currencies())
+
+    def _get_supported_currencies(self) -> str:
+        """Вернуть строку со списком поддерживаемых валют."""
+        registry = get_all_currencies()
+        if not registry:
+            return "Поддерживаемые валюты: список пуст"
+
+        codes = sorted(registry.keys())
+        return "Поддерживаемые валюты: " + ", ".join(codes)
 
     def _handle_api_request_error(self, error: ApiRequestError):
         """
@@ -288,10 +298,7 @@ class CLI:
             source_filter = SOURCE_ALIASES.get(normalized)
             if source_filter is None:
                 available = ", ".join(sorted(SOURCE_DISPLAY.keys()))
-                print(
-                    "Ошибка: неизвестный источник. Доступны значения: "
-                    f"{available}"
-                )
+                print(f"Ошибка: неизвестный источник. Доступны значения: {available}")
                 return
 
         message = self.rate_cases.update_rates(source_filter)
