@@ -5,12 +5,13 @@
 from datetime import datetime
 from typing import Optional
 
-from ..infra.database import get_database
-from ..infra.settings import get_settings
+from ..infra.database import Database, get_database
+from ..infra.settings import SettingsLoader, get_settings
+from .currencies import get_currency
 from .decorators import log_action
 from .exceptions import (
+    ApiRequestError,
     AuthenticationError,
-    CurrencyNotFoundError,
     EmptyValueError,
     InsufficientFundsError,
     InvalidPasswordError,
@@ -56,9 +57,15 @@ class Session:
 class UserUseCases:
     """Use cases для работы с пользователями."""
 
-    def __init__(self, session: Session):
+    def __init__(
+        self,
+        session: Session,
+        database: Database = None,
+        settings: SettingsLoader = None,
+    ):
         self.session = session
-        self.database = get_database()
+        self.database = database or get_database()
+        self.settings = settings or get_settings()
 
     @log_action("REGISTER")
     def register_user(self, username: str, password: str) -> str:
@@ -131,9 +138,15 @@ class UserUseCases:
 class PortfolioUseCases:
     """Use cases для работы с портфелями."""
 
-    def __init__(self, session: Session):
+    def __init__(
+        self,
+        session: Session,
+        database: Database = None,
+        settings: SettingsLoader = None,
+    ):
         self.session = session
-        self.database = get_database()
+        self.database = database or get_database()
+        self.settings = settings or get_settings()
 
     def show_portfolio(self, base_currency: str = None) -> str:
         """
@@ -148,7 +161,7 @@ class PortfolioUseCases:
 
         Raises:
             UnauthenticatedError: Если пользователь не залогинен
-            CurrencyNotFoundError: Если базовая валюта неизвестна
+            CurrencyNotFoundError: Если базовая валюта не найдена в реестре
         """
         # Проверка логина
         if not self.session.is_logged_in():
@@ -156,32 +169,17 @@ class PortfolioUseCases:
 
         # Если базовая валюта не указана, берем из конфигурации
         if base_currency is None:
-            settings = get_settings()
-            base_currency = settings.get_default_base_currency()
+            base_currency = self.settings.get_default_base_currency()
 
-        # Валидация базовой валюты
+        # Валидация базовой валюты через get_currency() - бросит CurrencyNotFoundError
         base_currency = base_currency.upper()
+        get_currency(base_currency)  # Валидация существования валюты
 
-        # Получить курсы для проверки валюты
+        # Безопасная операция: загрузить курсы и портфель
         rates = self.database.get_all_rates_dict()
-
-        # Проверить существование базовой валюты в курсах
-        base_currency_exists = False
-        for rate_key in rates.keys():
-            if base_currency in rate_key.split("_"):
-                base_currency_exists = True
-                break
-
-        # Загрузить портфель
         portfolio = self.database.find_portfolio_by_user_id(
             self.session.current_user.user_id
         )
-
-        # Проверяем валюту еще раз с учетом портфеля
-        if not base_currency_exists and (
-            not portfolio or base_currency not in portfolio._wallets
-        ):
-            raise CurrencyNotFoundError(base_currency)
 
         if not portfolio or not portfolio._wallets:
             message = (
@@ -232,44 +230,57 @@ class PortfolioUseCases:
         return "\n".join(result)
 
     @log_action("BUY", verbose=True)
-    def buy_currency(self, currency: str, amount: float) -> str:
+    def buy_currency(
+        self, currency: str, amount: float, base_currency: str = None
+    ) -> str:
         """
         Купить валюту.
 
         Args:
             currency: Код валюты
             amount: Количество
+            base_currency: Базовая валюта для расчета стоимости
+                (если None, берется из конфигурации)
 
         Returns:
             Сообщение об успешной покупке
 
         Raises:
             UnauthenticatedError: Если пользователь не залогинен
-            NegativeValueError: Если количество отрицательное
+            NegativeValueError: Если количество отрицательное или ноль
+            CurrencyNotFoundError: Если валюта не найдена в реестре
             RateUnavailableError: Если курс недоступен
         """
         # Проверка логина
         if not self.session.is_logged_in():
             raise UnauthenticatedError()
 
-        # Валидация
-        currency = currency.upper()
-
+        # Валидация amount > 0
         if amount <= 0:
             raise NegativeValueError("amount")
 
-        # Проверить существование валюты через курс
-        rate = self.database.get_rate(currency, "USD")
-        if rate is None:
-            raise RateUnavailableError(currency, "USD")
+        # Валидация currency_code через get_currency() - бросит CurrencyNotFoundError
+        currency_code = currency.upper()
+        get_currency(currency_code)  # Валидация существования валюты
 
-        # Загрузить портфель
+        # Если базовая валюта не указана, берем из конфигурации
+        if base_currency is None:
+            base_currency = self.settings.get_default_base_currency()
+        else:
+            base_currency = base_currency.upper()
+
+        # Получить курс для оценочной стоимости
+        rate = self.database.get_rate(currency_code, base_currency)
+        if rate is None:
+            raise RateUnavailableError(currency_code, base_currency)
+
+        # Безопасная операция: загрузить → модифицировать → сохранить
         portfolio = self.database.find_portfolio_by_user_id(
             self.session.current_user.user_id
         )
 
-        # Получить или создать кошелёк
-        wallet = portfolio.get_or_create_wallet(currency)
+        # Автосоздание кошелька при отсутствии валюты
+        wallet = portfolio.get_or_create_wallet(currency_code)
         old_balance = wallet.balance
 
         # Пополнить баланс
@@ -278,34 +289,43 @@ class PortfolioUseCases:
         # Сохранить портфель
         self.database.save_portfolio(portfolio)
 
-        result = [f"Покупка выполнена: {amount:.4f} {currency}"]
-        result[0] += f" по курсу {rate:.2f} USD/{currency}"
+        # Формирование ответа
+        result = [f"Покупка выполнена: {amount:.4f} {currency_code}"]
+        result[0] += f" по курсу {rate:.2f} {base_currency}/{currency_code}"
 
         result.append("Изменения в портфеле:")
         result.append(
-            f"- {currency}: было {old_balance:.4f} → стало {wallet.balance:.4f}"
+            f"- {currency_code}: было {old_balance:.4f} → стало {wallet.balance:.4f}"
         )
 
+        # Оценочная стоимость: amount * rate
         estimated_cost = amount * rate
-        result.append(f"Оценочная стоимость покупки: {estimated_cost:,.2f} USD")
+        result.append(
+            f"Оценочная стоимость покупки: {estimated_cost:,.2f} {base_currency}"
+        )
 
         return "\n".join(result)
 
     @log_action("SELL", verbose=True)
-    def sell_currency(self, currency: str, amount: float) -> str:
+    def sell_currency(
+        self, currency: str, amount: float, base_currency: str = None
+    ) -> str:
         """
         Продать валюту.
 
         Args:
             currency: Код валюты
             amount: Количество
+            base_currency: Базовая валюта для расчета выручки
+                (если None, берется из конфигурации)
 
         Returns:
             Сообщение об успешной продаже
 
         Raises:
             UnauthenticatedError: Если пользователь не залогинен
-            NegativeValueError: Если количество отрицательное
+            NegativeValueError: Если количество отрицательное или ноль
+            CurrencyNotFoundError: Если валюта не найдена в реестре
             WalletNotFoundError: Если кошелек не найден
             InsufficientFundsError: Если недостаточно средств
         """
@@ -313,50 +333,62 @@ class PortfolioUseCases:
         if not self.session.is_logged_in():
             raise UnauthenticatedError()
 
-        # Валидация
-        currency = currency.upper()
-
+        # Валидация amount > 0
         if amount <= 0:
             raise NegativeValueError("amount")
 
-        # Загрузить портфель
+        # Валидация currency_code через get_currency() - бросит CurrencyNotFoundError
+        currency_code = currency.upper()
+        get_currency(currency_code)  # Валидация существования валюты
+
+        # Безопасная операция: загрузить → модифицировать → сохранить
         portfolio = self.database.find_portfolio_by_user_id(
             self.session.current_user.user_id
         )
 
-        # Получить кошелёк
-        wallet = portfolio.get_wallet(currency)
+        # Получить кошелёк - проверка существования
+        wallet = portfolio.get_wallet(currency_code)
 
         if not wallet:
-            raise WalletNotFoundError(currency)
+            raise WalletNotFoundError(currency_code)
 
-        # Проверить достаточность средств
+        # Проверить достаточность средств - бросит InsufficientFundsError
         if wallet.balance < amount:
-            raise InsufficientFundsError(currency, wallet.balance, amount)
+            raise InsufficientFundsError(currency_code, wallet.balance, amount)
 
         old_balance = wallet.balance
 
-        # Снять средства (может выбросить InsufficientFundsError)
+        # Снять средства (может выбросить InsufficientFundsError при проверке в модели)
         wallet.withdraw(amount)
 
         # Сохранить портфель
         self.database.save_portfolio(portfolio)
 
-        # Получить курс для отчёта
-        rate = self.database.get_rate(currency, "USD")
+        # Если базовая валюта не указана, берем из конфигурации
+        if base_currency is None:
+            base_currency = self.settings.get_default_base_currency()
+        else:
+            base_currency = base_currency.upper()
 
-        result = [f"Продажа выполнена: {amount:.4f} {currency}"]
+        # Получить курс для оценочной выручки
+        rate = self.database.get_rate(currency_code, base_currency)
+
+        # Формирование ответа
+        result = [f"Продажа выполнена: {amount:.4f} {currency_code}"]
         if rate:
-            result[0] += f" по курсу {rate:.2f} USD/{currency}"
+            result[0] += f" по курсу {rate:.2f} {base_currency}/{currency_code}"
 
         result.append("Изменения в портфеле:")
         result.append(
-            f"- {currency}: было {old_balance:.4f} → стало {wallet.balance:.4f}"
+            f"- {currency_code}: было {old_balance:.4f} → стало {wallet.balance:.4f}"
         )
 
+        # Оценочная выручка в базовой валюте (если курс доступен)
         if rate:
             estimated_revenue = amount * rate
-            result.append(f"Оценочная выручка: {estimated_revenue:,.2f} USD")
+            result.append(
+                f"Оценочная выручка: {estimated_revenue:,.2f} {base_currency}"
+            )
 
         return "\n".join(result)
 
@@ -364,9 +396,15 @@ class PortfolioUseCases:
 class RateUseCases:
     """Use cases для работы с курсами валют."""
 
-    def __init__(self, session: Session):
+    def __init__(
+        self,
+        session: Session,
+        database: Database = None,
+        settings: SettingsLoader = None,
+    ):
         self.session = session
-        self.database = get_database()
+        self.database = database or get_database()
+        self.settings = settings or get_settings()
 
     def get_exchange_rate(self, from_currency: str, to_currency: str) -> str:
         """
@@ -381,27 +419,65 @@ class RateUseCases:
 
         Raises:
             EmptyValueError: Если коды валют пустые
+            CurrencyNotFoundError: Если валюты не найдены в реестре
             RateUnavailableError: Если курс недоступен
+            ApiRequestError: Если не удалось обновить устаревшие курсы
         """
         from_currency = from_currency.upper()
         to_currency = to_currency.upper()
 
-        # Валидация
+        # Валидация пустых кодов
         if not from_currency or not to_currency:
             raise EmptyValueError("Коды валют")
 
-        # Получить курс
-        rate = self.database.get_rate(from_currency, to_currency)
+        # Валидация кодов валют через get_currency() - бросит CurrencyNotFoundError
+        get_currency(from_currency)  # Валидация существования валюты
+        get_currency(to_currency)  # Валидация существования валюты
 
-        if rate is None:
-            raise RateUnavailableError(from_currency, to_currency)
+        # Получить TTL из настроек
+        ttl_seconds = self.settings.get_rates_ttl()
 
-        # Получить метку времени
+        # Загрузить курсы
         rates = self.database.load_rates()
         rate_key = f"{from_currency}_{to_currency}"
 
+        # Проверить существование курса
+        rate_value = None
+        updated_at = None
+
         if rate_key in rates and isinstance(rates[rate_key], dict):
-            updated_at = rates[rate_key].get("updated_at", "неизвестно")
+            rate_value = rates[rate_key].get("rate")
+            updated_at = rates[rate_key].get("updated_at")
+        else:
+            # Попробовать обратный курс
+            reverse_key = f"{to_currency}_{from_currency}"
+            if reverse_key in rates and isinstance(rates[reverse_key], dict):
+                reverse_rate = rates[reverse_key].get("rate")
+                if reverse_rate and reverse_rate != 0:
+                    rate_value = 1.0 / reverse_rate
+                    updated_at = rates[reverse_key].get("updated_at")
+
+        if rate_value is None:
+            raise RateUnavailableError(from_currency, to_currency)
+
+        # Проверить актуальность кеша (TTL)
+        is_stale = False
+        if updated_at:
+            try:
+                updated_dt = datetime.fromisoformat(updated_at)
+                now = datetime.now()
+                elapsed_seconds = (now - updated_dt).total_seconds()
+
+                if elapsed_seconds > ttl_seconds:
+                    is_stale = True
+            except (ValueError, TypeError):
+                is_stale = True
+
+        if is_stale:
+            raise ApiRequestError("Не удалось обновить курсы")
+
+        # Форматирование метки времени
+        if updated_at:
             try:
                 dt = datetime.fromisoformat(updated_at)
                 updated_str = dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -410,13 +486,15 @@ class RateUseCases:
         else:
             updated_str = "неизвестно"
 
+        # Формирование ответа
         result = [
-            f"Курс {from_currency}→{to_currency}: {rate:.8f} (обновлено: {updated_str})"
+            f"Курс {from_currency}→{to_currency}: {rate_value:.8f} "
+            f"(обновлено: {updated_str})"
         ]
 
         # Показать обратный курс
-        if rate != 0:
-            reverse_rate = 1.0 / rate
+        if rate_value != 0:
+            reverse_rate = 1.0 / rate_value
             result.append(
                 f"Обратный курс {to_currency}→{from_currency}: {reverse_rate:.8f}"
             )
