@@ -5,6 +5,7 @@
 from datetime import datetime
 from typing import Optional
 
+from ..infra.database import get_database
 from ..infra.settings import get_settings
 from .exceptions import (
     AuthenticationError,
@@ -21,7 +22,6 @@ from .exceptions import (
     WalletNotFoundError,
 )
 from .models import User
-from .services import get_data_service
 
 
 class Session:
@@ -57,7 +57,7 @@ class UserUseCases:
 
     def __init__(self, session: Session):
         self.session = session
-        self.data_service = get_data_service()
+        self.database = get_database()
 
     def register_user(self, username: str, password: str) -> str:
         """
@@ -85,7 +85,7 @@ class UserUseCases:
 
         # Создание пользователя
         try:
-            user = self.data_service.create_user(username, password)
+            user = self.database.create_user(username, password)
         except ValueError:
             raise UsernameExistsError(username)
 
@@ -111,7 +111,7 @@ class UserUseCases:
             InvalidPasswordError: Если пароль неверный
         """
         # Найти пользователя
-        user = self.data_service.find_user_by_username(username)
+        user = self.database.find_user_by_username(username)
 
         if not user:
             raise UserNotFoundError(username)
@@ -130,7 +130,7 @@ class PortfolioUseCases:
 
     def __init__(self, session: Session):
         self.session = session
-        self.data_service = get_data_service()
+        self.database = get_database()
 
     def show_portfolio(self, base_currency: str = None) -> str:
         """
@@ -160,7 +160,7 @@ class PortfolioUseCases:
         base_currency = base_currency.upper()
 
         # Получить курсы для проверки валюты
-        rates = self.data_service.get_all_rates_dict()
+        rates = self.database.get_all_rates_dict()
 
         # Проверить существование базовой валюты в курсах
         base_currency_exists = False
@@ -170,7 +170,7 @@ class PortfolioUseCases:
                 break
 
         # Загрузить портфель
-        portfolio = self.data_service.find_portfolio_by_user_id(
+        portfolio = self.database.find_portfolio_by_user_id(
             self.session.current_user.user_id
         )
 
@@ -255,12 +255,12 @@ class PortfolioUseCases:
             raise NegativeValueError("amount")
 
         # Проверить существование валюты через курс
-        rate = self.data_service.get_rate(currency, "USD")
+        rate = self.database.get_rate(currency, "USD")
         if rate is None:
             raise RateUnavailableError(currency, "USD")
 
         # Загрузить портфель
-        portfolio = self.data_service.find_portfolio_by_user_id(
+        portfolio = self.database.find_portfolio_by_user_id(
             self.session.current_user.user_id
         )
 
@@ -272,7 +272,7 @@ class PortfolioUseCases:
         wallet.deposit(amount)
 
         # Сохранить портфель
-        self.data_service.save_portfolio(portfolio)
+        self.database.save_portfolio(portfolio)
 
         result = [f"Покупка выполнена: {amount:.4f} {currency}"]
         result[0] += f" по курсу {rate:.2f} USD/{currency}"
@@ -315,7 +315,7 @@ class PortfolioUseCases:
             raise NegativeValueError("amount")
 
         # Загрузить портфель
-        portfolio = self.data_service.find_portfolio_by_user_id(
+        portfolio = self.database.find_portfolio_by_user_id(
             self.session.current_user.user_id
         )
 
@@ -335,10 +335,10 @@ class PortfolioUseCases:
         wallet.withdraw(amount)
 
         # Сохранить портфель
-        self.data_service.save_portfolio(portfolio)
+        self.database.save_portfolio(portfolio)
 
         # Получить курс для отчёта
-        rate = self.data_service.get_rate(currency, "USD")
+        rate = self.database.get_rate(currency, "USD")
 
         result = [f"Продажа выполнена: {amount:.4f} {currency}"]
         if rate:
@@ -361,7 +361,7 @@ class RateUseCases:
 
     def __init__(self, session: Session):
         self.session = session
-        self.data_service = get_data_service()
+        self.database = get_database()
 
     def get_exchange_rate(self, from_currency: str, to_currency: str) -> str:
         """
@@ -386,13 +386,13 @@ class RateUseCases:
             raise EmptyValueError("Коды валют")
 
         # Получить курс
-        rate = self.data_service.get_rate(from_currency, to_currency)
+        rate = self.database.get_rate(from_currency, to_currency)
 
         if rate is None:
             raise RateUnavailableError(from_currency, to_currency)
 
         # Получить метку времени
-        rates = self.data_service.load_rates()
+        rates = self.database.load_rates()
         rate_key = f"{from_currency}_{to_currency}"
 
         if rate_key in rates and isinstance(rates[rate_key], dict):
