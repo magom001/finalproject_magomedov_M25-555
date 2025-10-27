@@ -1,6 +1,9 @@
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+from dotenv import dotenv_values, load_dotenv
 
 
 class SettingsLoader:
@@ -46,9 +49,11 @@ class SettingsLoader:
         # Определяем пути
         self._project_root = Path(__file__).parent.parent.parent
         self._config_path = self._project_root / "config.json"
+        self._env_path = self._project_root / ".env"
 
         # Словарь для хранения конфигурации
         self._config: Dict[str, Any] = {}
+        self._env_cache: Dict[str, str] = {}
 
         # Дефолтные значения
         self._defaults = {
@@ -56,18 +61,41 @@ class SettingsLoader:
             "users_file": "users.json",
             "portfolios_file": "portfolios.json",
             "rates_file": "rates.json",
+            "exchange_rates_file": "exchange_rates.json",
             "rates_ttl_seconds": 3600,  # 1 час
             "default_base_currency": "USD",
             "log_format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             "log_level": "INFO",
             "log_file": str(self._project_root / "logs" / "app.log"),
+            "parser_log_file": str(self._project_root / "logs" / "parser.log"),
         }
+
+        # Загружаем переменные среды
+        self._load_env()
 
         # Загружаем конфигурацию
         self._load_config()
 
         # Отмечаем что инициализация завершена
         SettingsLoader._initialized = True
+
+    def _load_env(self):
+        """Загружает переменные окружения из файла .env."""
+        self._env_cache.clear()
+
+        if not self._env_path.exists():
+            load_dotenv()
+            return
+
+        try:
+            load_dotenv(self._env_path, override=False)
+            values = dotenv_values(self._env_path)
+            for key, value in values.items():
+                if value is None:
+                    continue
+                self._env_cache[key] = value
+        except OSError as exc:
+            print(f"Предупреждение: не удалось загрузить .env: {exc}")
 
     def _load_config(self):
         """
@@ -134,6 +162,7 @@ class SettingsLoader:
             >>> # ... изменения в pyproject.toml ...
             >>> settings.reload()
         """
+        self._load_env()
         self._load_config()
 
     def get_data_dir(self) -> Path:
@@ -172,6 +201,15 @@ class SettingsLoader:
         """
         return self.get_data_dir() / self.get("rates_file")
 
+    def get_exchange_rates_file_path(self) -> Path:
+        """
+        Получить путь к файлу истории курсов валют.
+
+        Returns:
+            Path объект файла истории курсов
+        """
+        return self.get_data_dir() / self.get("exchange_rates_file")
+
     def get_rates_ttl(self) -> int:
         """
         Получить время жизни курсов в секундах.
@@ -202,6 +240,20 @@ class SettingsLoader:
             "level": self.get("log_level"),
             "file": self.get("log_file"),
         }
+
+    def get_parser_log_file_path(self) -> Path:
+        """Получить путь к файлу логов сервиса парсинга."""
+        return Path(self.get("parser_log_file"))
+
+    def get_env(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        """Получить значение переменной окружения, учитывая кэш .env."""
+        if key in self._env_cache:
+            return self._env_cache[key]
+        return os.getenv(key, default)
+
+    def get_exchangerate_api_key(self) -> Optional[str]:
+        """Вернуть API ключ сервиса ExchangeRate-API из окружения."""
+        return self.get_env("EXCHANGERATE_API_KEY")
 
     def __repr__(self) -> str:
         """Строковое представление конфигурации."""

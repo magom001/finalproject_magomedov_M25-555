@@ -2,10 +2,12 @@
 Модуль usecases.py содержит всю бизнес-логику приложения.
 """
 
-from datetime import datetime
-from typing import Optional
+import logging
+from datetime import datetime, timezone
+from typing import List, Optional, Tuple
 
 from ..infra.database import Database, get_database
+from ..infra.logging_config import get_parser_logger
 from ..infra.settings import SettingsLoader, get_settings
 from .currencies import get_currency
 from .decorators import log_action
@@ -401,10 +403,156 @@ class RateUseCases:
         session: Session,
         database: Database = None,
         settings: SettingsLoader = None,
+        logger: Optional[logging.Logger] = None,
     ):
         self.session = session
         self.database = database or get_database()
         self.settings = settings or get_settings()
+        self.logger = logger or get_parser_logger()
+
+    def _log_info(self, message: str) -> None:
+        self.logger.info(message)
+        print(f"INFO: {message}")
+
+    def _log_error(self, message: str) -> None:
+        self.logger.error(message)
+        print(f"ERROR: {message}")
+
+    def _load_pair_rate(
+        self, from_currency: str, to_currency: str
+    ) -> Optional[Tuple[float, Optional[str]]]:
+        payload = self.database.load_rates()
+        pairs = payload.get("pairs", {}) if isinstance(payload, dict) else {}
+
+        direct_key = f"{from_currency}_{to_currency}"
+        direct_entry = pairs.get(direct_key)
+        if isinstance(direct_entry, dict):
+            rate_raw = direct_entry.get("rate")
+            try:
+                rate_value = float(rate_raw)
+            except (TypeError, ValueError):
+                rate_value = None
+            if rate_value is not None:
+                updated_at = direct_entry.get("updated_at")
+                return rate_value, updated_at if isinstance(updated_at, str) else None
+
+        reverse_key = f"{to_currency}_{from_currency}"
+        reverse_entry = pairs.get(reverse_key)
+        if isinstance(reverse_entry, dict):
+            rate_raw = reverse_entry.get("rate")
+            try:
+                rate_value = float(rate_raw) if rate_raw is not None else None
+            except (TypeError, ValueError):
+                rate_value = None
+            if rate_value and rate_value != 0:
+                updated_at = reverse_entry.get("updated_at")
+                return 1.0 / rate_value, updated_at if isinstance(
+                    updated_at, str
+                ) else None
+
+        return None
+
+    @staticmethod
+    def _is_stale(updated_at: Optional[str], ttl_seconds: int) -> bool:
+        if ttl_seconds <= 0:
+            return False
+
+        if not updated_at:
+            return True
+
+        try:
+            normalized = updated_at.replace("Z", "+00:00")
+            timestamp = datetime.fromisoformat(normalized)
+        except (AttributeError, ValueError, TypeError):
+            return True
+
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+        now = datetime.now(timezone.utc)
+        delta = (now - timestamp).total_seconds()
+        return delta > ttl_seconds
+
+    def _refresh_rates(self) -> bool:
+        from ..parser_service.api_clients import (
+            CoinGeckoClient,
+            ExchangeRateApiClient,
+        )
+        from ..parser_service.config import ParserConfig
+        from ..parser_service.storage import RatesStorage
+        from ..parser_service.updater import RatesUpdater
+
+        config = ParserConfig.load(self.settings)
+        storage = RatesStorage(config)
+        clients = [CoinGeckoClient(config), ExchangeRateApiClient(config)]
+        updater = RatesUpdater(clients=clients, storage=storage, config=config)
+
+        try:
+            updater.run_update()
+        except ApiRequestError:
+            return False
+        return True
+
+    def update_rates(self, source_filter: Optional[str] = None) -> str:
+        """Обновить курсы через сервис парсинга."""
+
+        from ..parser_service.api_clients import (
+            CoinGeckoClient,
+            ExchangeRateApiClient,
+        )
+        from ..parser_service.config import ParserConfig
+        from ..parser_service.storage import RatesStorage
+        from ..parser_service.updater import RatesUpdater
+
+        config = ParserConfig.load(self.settings)
+        storage = RatesStorage(config)
+        clients = [CoinGeckoClient(config), ExchangeRateApiClient(config)]
+
+        updater = RatesUpdater(clients=clients, storage=storage, config=config)
+        self._log_info("Запускаем обновление курсов")
+        result = updater.run_update(source_filter=source_filter)
+
+        if source_filter:
+            active_clients: List[str] = [source_filter]
+        else:
+            active_clients = [client.name for client in clients]
+
+        error_map = {
+            err.get("source"): err.get("message")
+            for err in result.errors
+            if isinstance(err, dict) and err.get("source")
+        }
+
+        for client_name in active_clients:
+            processed = result.source_stats.get(client_name, 0)
+            if processed:
+                self._log_info(f"Источник {client_name} → получено {processed} курсов")
+                continue
+
+            error_msg = error_map.get(client_name)
+            if error_msg:
+                self._log_error(f"Источник {client_name} не ответил: {error_msg}")
+            else:
+                self._log_info(f"Источник {client_name} → нет новых данных")
+
+        total_processed = sum(
+            result.source_stats.get(name, 0) for name in active_clients
+        )
+        self._log_info(f"Сохраняем {total_processed} курсов в {config.rates_file_path}")
+
+        failing_sources = [name for name in active_clients if error_map.get(name)]
+
+        if failing_sources:
+            details = "; ".join(
+                f"{name}: {error_map.get(name)}" for name in failing_sources
+            )
+            raise ApiRequestError(f"Источники недоступны ({details})")
+
+        last_refresh = result.last_refresh or "н/д"
+        return (
+            f"Обновление успешно. Всего обновлено: {total_processed}. "
+            f"Последнее обновление: {last_refresh}"
+        )
 
     def get_exchange_rate(self, from_currency: str, to_currency: str) -> str:
         """
@@ -415,7 +563,7 @@ class RateUseCases:
             to_currency: Целевая валюта
 
         Returns:
-            Информация о курсе обмена
+            Отформатированное сообщение с курсом
 
         Raises:
             EmptyValueError: Если коды валют пустые
@@ -438,65 +586,129 @@ class RateUseCases:
         ttl_seconds = self.settings.get_rates_ttl()
 
         # Загрузить курсы
-        rates = self.database.load_rates()
-        rate_key = f"{from_currency}_{to_currency}"
+        pair_data = self._load_pair_rate(from_currency, to_currency)
 
-        # Проверить существование курса
-        rate_value = None
-        updated_at = None
+        if pair_data is None:
+            if not self._refresh_rates():
+                raise RateUnavailableError(from_currency, to_currency)
+            pair_data = self._load_pair_rate(from_currency, to_currency)
+            if pair_data is None:
+                raise RateUnavailableError(from_currency, to_currency)
 
-        if rate_key in rates and isinstance(rates[rate_key], dict):
-            rate_value = rates[rate_key].get("rate")
-            updated_at = rates[rate_key].get("updated_at")
-        else:
-            # Попробовать обратный курс
-            reverse_key = f"{to_currency}_{from_currency}"
-            if reverse_key in rates and isinstance(rates[reverse_key], dict):
-                reverse_rate = rates[reverse_key].get("rate")
-                if reverse_rate and reverse_rate != 0:
-                    rate_value = 1.0 / reverse_rate
-                    updated_at = rates[reverse_key].get("updated_at")
+        rate_value, updated_at = pair_data
 
-        if rate_value is None:
-            raise RateUnavailableError(from_currency, to_currency)
+        if self._is_stale(updated_at, ttl_seconds):
+            if not self._refresh_rates():
+                raise ApiRequestError("Не удалось обновить курсы")
+            pair_data = self._load_pair_rate(from_currency, to_currency)
+            if pair_data is None:
+                raise RateUnavailableError(from_currency, to_currency)
+            rate_value, updated_at = pair_data
+            if self._is_stale(updated_at, ttl_seconds):
+                raise ApiRequestError("Не удалось обновить курсы")
 
-        # Проверить актуальность кеша (TTL)
-        is_stale = False
+        updated_display = "неизвестно"
         if updated_at:
             try:
-                updated_dt = datetime.fromisoformat(updated_at)
-                now = datetime.now()
-                elapsed_seconds = (now - updated_dt).total_seconds()
+                normalized = updated_at.replace("Z", "+00:00")
+                dt = datetime.fromisoformat(normalized)
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(timezone.utc)
+                updated_display = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, TypeError, AttributeError):
+                updated_display = updated_at
 
-                if elapsed_seconds > ttl_seconds:
-                    is_stale = True
-            except (ValueError, TypeError):
-                is_stale = True
-
-        if is_stale:
-            raise ApiRequestError("Не удалось обновить курсы")
-
-        # Форматирование метки времени
-        if updated_at:
-            try:
-                dt = datetime.fromisoformat(updated_at)
-                updated_str = dt.strftime("%Y-%m-%d %H:%M:%S")
-            except (ValueError, TypeError):
-                updated_str = updated_at
-        else:
-            updated_str = "неизвестно"
-
-        # Формирование ответа
-        result = [
-            f"Курс {from_currency}→{to_currency}: {rate_value:.8f} "
-            f"(обновлено: {updated_str})"
+        lines = [
+            f"    Курс {from_currency}→{to_currency}: {rate_value:.8f} "
+            f"(обновлено: {updated_display})"
         ]
 
-        # Показать обратный курс
-        if rate_value != 0:
+        if rate_value is not None and rate_value != 0:
             reverse_rate = 1.0 / rate_value
-            result.append(
-                f"Обратный курс {to_currency}→{from_currency}: {reverse_rate:.8f}"
+            lines.append(
+                f"    Обратный курс {to_currency}→{from_currency}: {reverse_rate:.2f}"
             )
 
-        return "\n".join(result)
+        return "\n".join(lines)
+
+    def list_cached_rates(
+        self,
+        currency_filter: Optional[str] = None,
+        base_filter: Optional[str] = None,
+        top_n: Optional[int] = None,
+    ) -> str:
+        payload = self.database.load_rates()
+        pairs = payload.get("pairs", {})
+
+        if not pairs:
+            return (
+                "Локальный кеш курсов пуст. Выполните 'update-rates', чтобы "
+                "загрузить данные."
+            )
+
+        currency_code = None
+        pair_code = None
+        if currency_filter:
+            normalized = currency_filter.upper()
+            if "_" in normalized:
+                pair_code = normalized
+            else:
+                currency_code = normalized
+                get_currency(currency_code)
+
+        base_code = None
+        if base_filter:
+            base_code = base_filter.upper()
+            get_currency(base_code)
+
+        entries: List[Tuple[str, float]] = []
+
+        for pair_name, info in pairs.items():
+            if not isinstance(info, dict):
+                continue
+
+            rate_value = info.get("rate")
+            try:
+                rate_float = float(rate_value)
+            except (TypeError, ValueError):
+                continue
+
+            from_code, sep, to_code = pair_name.partition("_")
+            if not sep:
+                continue
+
+            if pair_code and pair_name != pair_code:
+                continue
+
+            if currency_code and from_code != currency_code:
+                continue
+
+            if base_code and to_code != base_code:
+                continue
+
+            entries.append((pair_name, rate_float))
+
+        if not entries:
+            if pair_code:
+                return f"Курс для '{pair_code}' не найден в кеше."
+            if currency_code:
+                return f"Курс для '{currency_code}' не найден в кеше."
+            return "По заданным фильтрам курсы не найдены."
+
+        if top_n is not None:
+            entries.sort(key=lambda item: item[1], reverse=True)
+            entries = entries[:top_n]
+        else:
+            entries.sort(key=lambda item: item[0])
+
+        last_refresh = payload.get("last_refresh") or "н/д"
+        lines = [f"Курсы из кеша (обновление {last_refresh}):"]
+
+        for pair_name, rate_value in entries:
+            if rate_value >= 1:
+                formatted_rate = f"{rate_value:.2f}"
+            else:
+                formatted_rate = f"{rate_value:.5f}".rstrip("0").rstrip(".")
+            lines.append(f"- {pair_name}: {formatted_rate}")
+
+        return "\n".join(lines)

@@ -91,6 +91,45 @@ def get_action_logger() -> logging.Logger:
     return logger
 
 
+def get_parser_logger() -> logging.Logger:
+    """Получить logger для сервиса парсинга курсов."""
+    settings = get_settings()
+
+    log_level = settings.get("parser_log_level", settings.get("log_level", "INFO"))
+    log_format = settings.get(
+        "log_format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+    log_file = settings.get_parser_log_file_path()
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    logger = logging.getLogger("valutatrade.parser")
+    logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
+
+    if logger.handlers:
+        return logger
+
+    formatter = logging.Formatter(log_format, datefmt="%Y-%m-%dT%H:%M:%S")
+
+    file_handler = RotatingFileHandler(
+        log_file,
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.WARNING)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    logger.propagate = False
+
+    return logger
+
+
 def format_action_log(
     action: str,
     username: str = None,

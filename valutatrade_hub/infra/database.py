@@ -5,7 +5,7 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from ..core.models import Portfolio, User
 from .settings import get_settings
@@ -51,17 +51,36 @@ class Database:
             self._save_json(self.portfolios_file, [])
 
         if not self.rates_file.exists():
+            now_iso = datetime.now().isoformat()
+            default_pairs = {
+                "EUR_USD": {
+                    "rate": 1.0786,
+                    "updated_at": now_iso,
+                    "source": "SeedData",
+                },
+                "BTC_USD": {
+                    "rate": 59337.21,
+                    "updated_at": now_iso,
+                    "source": "SeedData",
+                },
+                "RUB_USD": {
+                    "rate": 0.01016,
+                    "updated_at": now_iso,
+                    "source": "SeedData",
+                },
+                "ETH_USD": {
+                    "rate": 3720.00,
+                    "updated_at": now_iso,
+                    "source": "SeedData",
+                },
+            }
             default_rates = {
-                "EUR_USD": {"rate": 1.0786, "updated_at": datetime.now().isoformat()},
-                "BTC_USD": {"rate": 59337.21, "updated_at": datetime.now().isoformat()},
-                "RUB_USD": {"rate": 0.01016, "updated_at": datetime.now().isoformat()},
-                "ETH_USD": {"rate": 3720.00, "updated_at": datetime.now().isoformat()},
-                "source": "ParserService",
-                "last_refresh": datetime.now().isoformat(),
+                "pairs": default_pairs,
+                "last_refresh": now_iso,
             }
             self._save_json(self.rates_file, default_rates)
 
-    def _load_json(self, file_path: Path) -> any:
+    def _load_json(self, file_path: Path) -> Any:
         """Загрузить данные из JSON файла."""
         try:
             with open(file_path, "r", encoding="utf-8") as f:
@@ -181,13 +200,34 @@ class Database:
 
     # === Работа с курсами валют ===
 
-    def load_rates(self) -> Dict:
-        """Загрузить курсы валют."""
-        return self._load_json(self.rates_file)
+    def load_rates(self) -> Dict[str, Any]:
+        """Загрузить курсы валют с приведением к современному формату."""
+        raw_data = self._load_json(self.rates_file)
 
-    def save_rates(self, rates: Dict):
-        """Сохранить курсы валют."""
-        self._save_json(self.rates_file, rates)
+        if not isinstance(raw_data, dict):
+            return {"pairs": {}, "last_refresh": None}
+
+        pairs_section = raw_data.get("pairs")
+        if not isinstance(pairs_section, dict):
+            pairs_section = {}
+            for key, value in raw_data.items():
+                if key == "last_refresh":
+                    continue
+                if isinstance(value, dict) and "rate" in value:
+                    pairs_section[key] = value
+
+        return {
+            "pairs": pairs_section,
+            "last_refresh": raw_data.get("last_refresh"),
+        }
+
+    def save_rates(self, rates: Dict[str, Any]):
+        """Сохранить курсы валют в формате с секцией pairs."""
+        payload = {
+            "pairs": rates.get("pairs", {}),
+            "last_refresh": rates.get("last_refresh"),
+        }
+        self._save_json(self.rates_file, payload)
 
     def get_rate(self, from_currency: str, to_currency: str) -> Optional[float]:
         """
@@ -200,7 +240,8 @@ class Database:
         Returns:
             Курс конвертации или None если не найден
         """
-        rates = self.load_rates()
+        rates_payload = self.load_rates()
+        pairs = rates_payload.get("pairs", {})
 
         from_currency = from_currency.upper()
         to_currency = to_currency.upper()
@@ -211,13 +252,15 @@ class Database:
 
         # Прямой курс
         rate_key = f"{from_currency}_{to_currency}"
-        if rate_key in rates and isinstance(rates[rate_key], dict):
-            return rates[rate_key].get("rate")
+        if rate_key in pairs and isinstance(pairs[rate_key], dict):
+            return pairs[rate_key].get("rate")
 
         # Обратный курс
         reverse_key = f"{to_currency}_{from_currency}"
-        if reverse_key in rates and isinstance(rates[reverse_key], dict):
-            return 1.0 / rates[reverse_key].get("rate", 1)
+        if reverse_key in pairs and isinstance(pairs[reverse_key], dict):
+            base_rate = pairs[reverse_key].get("rate")
+            if base_rate:
+                return 1.0 / base_rate
 
         return None
 
@@ -230,13 +273,17 @@ class Database:
             to_currency: Целевая валюта
             rate: Новый курс
         """
-        rates = self.load_rates()
+        payload = self.load_rates()
+        pairs = payload.setdefault("pairs", {})
 
         rate_key = f"{from_currency.upper()}_{to_currency.upper()}"
-        rates[rate_key] = {"rate": rate, "updated_at": datetime.now().isoformat()}
-        rates["last_refresh"] = datetime.now().isoformat()
+        pairs[rate_key] = {
+            "rate": rate,
+            "updated_at": datetime.now().isoformat(),
+        }
+        payload["last_refresh"] = datetime.now().isoformat()
 
-        self.save_rates(rates)
+        self.save_rates(payload)
 
     def get_all_rates_dict(self) -> Dict[str, float]:
         """
@@ -245,10 +292,11 @@ class Database:
         Returns:
             Словарь {currency_pair: rate}
         """
-        rates = self.load_rates()
+        payload = self.load_rates()
+        pairs = payload.get("pairs", {})
         result = {}
 
-        for key, value in rates.items():
+        for key, value in pairs.items():
             if isinstance(value, dict) and "rate" in value:
                 result[key] = value["rate"]
 

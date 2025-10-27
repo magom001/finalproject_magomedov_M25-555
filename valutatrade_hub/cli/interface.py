@@ -10,12 +10,13 @@ from typing import Any, Dict
 from ..core.exceptions import (
     ApiRequestError,
     CurrencyNotFoundError,
+    ValidationError,
     ValutaTradeError,
 )
 from ..core.usecases import PortfolioUseCases, RateUseCases, Session, UserUseCases
 
 
-# ANSI color codes
+# ANSI-коды цветов
 class Colors:
     CYAN = "\033[96m"
     GREEN = "\033[92m"
@@ -102,6 +103,14 @@ class CLI:
         print(
             f"  {c.GREEN}get-rate{c.RESET}       {c.DIM}--from <код> "
             f"--to <код>{c.RESET}"
+        )
+        print(
+            f"  {c.GREEN}update-rates{c.RESET}   {c.DIM}[--source "
+            f"coingecko|exchangerate]{c.RESET}"
+        )
+        print(
+            f"  {c.GREEN}show-rates{c.RESET}     {c.DIM}[--currency <код>] "
+            f"[--base <код>] [--top <N>]{c.RESET}"
         )
         print(f"  {c.GREEN}help{c.RESET}")
         print(f"  {c.GREEN}exit{c.RESET}")
@@ -251,6 +260,61 @@ class CLI:
             return
 
         message = self.rate_cases.get_exchange_rate(from_currency, to_currency)
+        print(message)
+
+    def _cmd_update_rates(self, args: Dict[str, Any]):
+        """Обработчик команды update-rates."""
+        source_arg = args.get("source")
+        source_filter = None
+
+        if source_arg:
+            source_map = {
+                "coingecko": "CoinGecko",
+                "coin": "CoinGecko",
+                "exchangerate": "ExchangeRate-API",
+                "exchange": "ExchangeRate-API",
+                "exchange-rate": "ExchangeRate-API",
+                "exchange_rate": "ExchangeRate-API",
+            }
+            normalized = source_arg.lower()
+            source_filter = source_map.get(normalized)
+            if source_filter is None:
+                print(
+                    "Ошибка: неизвестный источник. Доступны значения: "
+                    "coingecko, exchangerate"
+                )
+                return
+
+        message = self.rate_cases.update_rates(source_filter)
+        print(message)
+
+    def _cmd_show_rates(self, args: Dict[str, Any]):
+        """Обработчик команды show-rates."""
+        currency_filter = args.get("currency")
+        base_filter = args.get("base")
+        top_filter = args.get("top")
+
+        top_n = None
+        if top_filter is not None:
+            try:
+                top_n = int(top_filter)
+            except ValueError as exc:
+                raise ValidationError(
+                    "Некорректный параметр",
+                    f"Некорректное значение для --top: '{top_filter}'",
+                ) from exc
+
+            if top_n <= 0:
+                raise ValidationError(
+                    "Некорректный параметр",
+                    "Параметр --top должен быть положительным целым числом",
+                )
+
+        message = self.rate_cases.list_cached_rates(
+            currency_filter=currency_filter,
+            base_filter=base_filter,
+            top_n=top_n,
+        )
         print(message)
 
     def run_repl(self):
