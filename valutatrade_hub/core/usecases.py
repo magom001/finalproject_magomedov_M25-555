@@ -7,6 +7,7 @@ from typing import Optional
 
 from ..infra.database import get_database
 from ..infra.settings import get_settings
+from .decorators import log_action
 from .exceptions import (
     AuthenticationError,
     CurrencyNotFoundError,
@@ -59,6 +60,7 @@ class UserUseCases:
         self.session = session
         self.database = get_database()
 
+    @log_action("REGISTER")
     def register_user(self, username: str, password: str) -> str:
         """
         Зарегистрировать нового пользователя.
@@ -95,6 +97,7 @@ class UserUseCases:
         )
         return message
 
+    @log_action("LOGIN")
     def login_user(self, username: str, password: str) -> str:
         """
         Войти в систему.
@@ -228,6 +231,7 @@ class PortfolioUseCases:
 
         return "\n".join(result)
 
+    @log_action("BUY", verbose=True)
     def buy_currency(self, currency: str, amount: float) -> str:
         """
         Купить валюту.
@@ -287,6 +291,7 @@ class PortfolioUseCases:
 
         return "\n".join(result)
 
+    @log_action("SELL", verbose=True)
     def sell_currency(self, currency: str, amount: float) -> str:
         """
         Продать валюту.

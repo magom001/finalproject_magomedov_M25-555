@@ -5,3 +5,4 @@ dist/
 db_meta.json
 data/
 logs/
+.env
